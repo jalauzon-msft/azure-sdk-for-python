@@ -365,14 +365,15 @@ class StorageContentValidation(SansIOHTTPPolicy):
 
     def on_request(self, request: "PipelineRequest") -> None:
         validate_content = request.context.options.pop('validate_content', False)
-        if validate_content and request.http_request.method != 'GET':
+        if validate_content is True and request.http_request.method != 'GET':
             computed_md5 = encode_base64(StorageContentValidation.get_content_md5(request.http_request.data))
             request.http_request.headers[self.header_name] = computed_md5
             request.context['validate_content_md5'] = computed_md5
         request.context['validate_content'] = validate_content
 
     def on_response(self, request: "PipelineRequest", response: "PipelineResponse") -> None:
-        if response.context.get('validate_content', False) and response.http_response.headers.get('content-md5'):
+        validate_content = request.context.options.pop('validate_content', False)
+        if validate_content is True and response.http_response.headers.get('content-md5'):
             computed_md5 = request.context.get('validate_content_md5') or \
                 encode_base64(StorageContentValidation.get_content_md5(response.http_response.body()))
             if response.http_response.headers['content-md5'] != computed_md5:

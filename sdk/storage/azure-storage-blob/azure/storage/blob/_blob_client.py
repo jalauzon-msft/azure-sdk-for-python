@@ -22,10 +22,11 @@ from azure.core.pipeline import Pipeline
 from azure.core.tracing.decorator import distributed_trace
 from ._shared import encode_base64
 from ._shared.base_client import StorageAccountHostsMixin, parse_connection_str, parse_query, TransportWrapper
-from ._shared.uploads import IterStreamer
+from ._shared.uploads import IterStreamer, prepare_upload_data
 from ._shared.uploads_async import AsyncIterStreamer
 from ._shared.request_handlers import (
     add_metadata_headers,
+    get_content_validation_options,
     get_length,
     read_length,
     validate_and_format_range_headers)
@@ -2466,17 +2467,19 @@ class BlobClient(StorageAccountHostsMixin, StorageEncryptionMixin):  # pylint: d
         if self.require_encryption or (self.key_encryption_key is not None):
             raise ValueError(_ERROR_UNSUPPORTED_METHOD_FOR_ENCRYPTION)
         block_id = encode_base64(str(block_id))
-        if isinstance(data, str):
-            data = data.encode(kwargs.pop('encoding', 'UTF-8'))  # type: ignore
-        access_conditions = get_access_conditions(kwargs.pop('lease', None))
-        if length is None:
-            length = get_length(data)
-            if length is None:
-                length, data = read_length(data)
-        if isinstance(data, bytes):
-            data = data[:length]
 
+        encoding = kwargs.pop('encoding', 'utf-8')
         validate_content = kwargs.pop('validate_content', False)
+
+        data, length = prepare_upload_data(data, encoding, length, False, validate_content)
+        content_validation_options = get_content_validation_options(validate_content, length)
+
+        # For structured message requests, the content length will not match the length
+        content_length = length
+        if validate_content == 'crc64':
+            content_length = len(data)
+
+        access_conditions = get_access_conditions(kwargs.pop('lease', None))
         cpk_scope_info = get_cpk_scope_info(kwargs)
         cpk = kwargs.pop('cpk', None)
         cpk_info = None
@@ -2488,7 +2491,7 @@ class BlobClient(StorageAccountHostsMixin, StorageEncryptionMixin):  # pylint: d
 
         options = {
             'block_id': block_id,
-            'content_length': length,
+            'content_length': content_length,
             'body': data,
             'transactional_content_md5': None,
             'timeout': kwargs.pop('timeout', None),
@@ -2498,6 +2501,7 @@ class BlobClient(StorageAccountHostsMixin, StorageEncryptionMixin):  # pylint: d
             'cpk_info': cpk_info,
             'cls': return_response_headers,
         }
+        options.update(content_validation_options)
         options.update(kwargs)
         return options
 

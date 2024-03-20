@@ -4,7 +4,7 @@
 # license information.
 # --------------------------------------------------------------------------
 
-from typing import Dict, Optional
+from typing import Any, Dict, Literal, Optional, Union
 
 import logging
 from os import fstat
@@ -19,6 +19,7 @@ _LOGGER = logging.getLogger(__name__)
 _REQUEST_DELIMITER_PREFIX = "batch_"
 _HTTP1_1_IDENTIFIER = "HTTP/1.1"
 _HTTP_LINE_ENDING = "\r\n"
+_DEFAULT_STRUCTURED_MESSAGE_VERSION = '1.0'
 
 
 def serialize_iso(attr):
@@ -269,3 +270,27 @@ def _make_body_from_sub_request(sub_request):
     sub_request_body.append(_HTTP_LINE_ENDING)
 
     return ''.join(sub_request_body).encode()
+
+
+def get_content_validation_options(
+    validate_content: Union[bool, Literal['crc64']],
+    length: Optional[int]
+) -> Dict[str, Any]:
+    if not validate_content:
+        return {}
+    # Legacy support for bool
+    if validate_content == True:
+        return {'validate_content': True}
+
+    if validate_content == 'crc64':
+        structured_body_type = f"XSM/{_DEFAULT_STRUCTURED_MESSAGE_VERSION}; properties=crc64"
+        if length is None:
+            raise ValueError("Length must be known for crc64 content validation")
+        return {
+            'structured_body_type': structured_body_type,
+            'structured_content_length': length
+        }
+    else:
+        raise ValueError(f"Unrecognized value for validate_content: {validate_content}")
+
+

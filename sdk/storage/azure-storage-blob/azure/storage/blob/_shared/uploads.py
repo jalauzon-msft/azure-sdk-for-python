@@ -9,16 +9,57 @@ from io import BytesIO, IOBase, SEEK_CUR, SEEK_END, SEEK_SET, UnsupportedOperati
 from itertools import islice
 from math import ceil
 from threading import Lock
+from typing import AnyStr, IO, Iterable, Literal, Optional, Tuple, Union
 
 from azure.core.tracing.common import with_current_context
 
 from . import encode_base64, url_quote
-from .request_handlers import get_length
+from .request_handlers import get_length, read_length
 from .response_handlers import return_response_headers
+from .streams import StructuredMessageEncodeStream, StructuredMessageProperties
 
 
 _LARGE_BLOB_UPLOAD_MAX_READ_BUFFER_SIZE = 4 * 1024 * 1024
 _ERROR_VALUE_SHOULD_BE_SEEKABLE_STREAM = "{0} should be a seekable file-like/io.IOBase type stream object."
+
+
+def prepare_upload_data(
+    data: Union[bytes, str, IO[bytes], Iterable[AnyStr]],
+    encoding: str,
+    length: Optional[int],
+    multi_part: bool,
+    validate_content: Union[bool, Literal['crc64'], None]
+) -> Tuple[Union[bytes, IO[bytes]], Optional[int]]:
+    # Trim the incoming data per provided length
+    if length is not None and isinstance(data, (str, bytes)) and length != len(data):
+        data = data[:length]
+    # Encode raw string data
+    if isinstance(data, str):
+        data = data.encode(encoding)
+
+    # Attempt to determine length of data if it's not provided
+    if length is None:
+        length = get_length(data)
+    # For non-multi-part uploads, we must know the length
+    if length is None and not multi_part:
+        length, data = read_length(data)
+
+    structured_message = validate_content == 'crc64'
+    if isinstance(data, bytes):
+        # Multi-part and structured message require a stream
+        if multi_part or structured_message:
+            data = BytesIO(data)
+    elif hasattr(data, 'read'):
+        pass
+    elif hasattr(data, '__iter__') and not isinstance(data, (list, tuple, set, dict)):
+        data = IterStreamer(data, encoding=encoding)
+    else:
+        raise TypeError(f"Unsupported data type: {type(data)}")
+
+    if structured_message:
+        data = StructuredMessageEncodeStream(data, length, StructuredMessageProperties.CRC64)
+
+    return data, length
 
 
 def _parallel_uploads(executor, uploader, pending, running):
